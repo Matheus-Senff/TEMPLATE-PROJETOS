@@ -13,7 +13,7 @@
   "dependencies": {
     "@clerk/nextjs": "^7.9.23",
     "@hookform/resolvers": "^7.0.2",
-    "@sentry/nextjs": "^11.10.0",
+    "@sentry/nextjs": "^11.11.0",
     "@tanstack/react-query": "^5.105.3",
     "ably": "^2.30.0",
     "clsx": "^2.1.1",
