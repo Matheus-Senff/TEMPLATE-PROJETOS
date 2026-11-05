@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   drill:
+    # O próprio repositório-modelo não tem banco: só roda nos projetos criados a partir dele.
+    if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-latest
     environment: production
     services:
