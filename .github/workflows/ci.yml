@@ -1,0 +1,155 @@
+name: CI/CD
+
+# CI: every push and pull request is linted, typechecked, tested (PGlite and a real Postgres) and built.
+# CD: Vercel deploys apps/web and apps/api through its Git integration (preview per PR, production on main).
+# Database migrations run INSIDE the API's Vercel production build (apps/api `vercel-build` ->
+# dist/scripts/migrate.js): if a migration fails, the build fails and the current version keeps serving.
+# The "migrate" job below is only a manual fallback (Actions > CI/CD > Run workflow).
+#
+# Supply chain: every action is pinned to a full commit SHA (the tag is in the trailing comment;
+# Dependabot keeps both up to date). Secrets are exposed only to the steps that need them, never to
+# `npm ci` (install scripts of dependencies run there).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      migrate:
+        description: "Aplicar as migrações no banco de produção agora (fallback manual)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only superseded pull request runs are canceled; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Typecheck, test, build
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      # Dummy values: build/typecheck only, no network calls to these services.
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+      CLERK_SECRET_KEY: sk_test_ci
+      API_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Audit production dependencies (high/critical)
+        run: npm audit --omit=dev --audit-level=high
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  db:
+    name: Migrations + integration tests (real Postgres)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PG_URL: postgresql://postgres:postgres@localhost:5432/app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Migrations are consistent (drizzle-kit check)
+        run: npx drizzle-kit check
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.PG_URL }}
+      - name: Schema and migrations are in sync (db:generate creates nothing)
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.PG_URL }}
+        run: |
+          npx drizzle-kit generate
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::schema.ts changed without a committed migration: run npm run db:generate"
+            git status --porcelain drizzle
+            exit 1
+          fi
+      - name: Apply every migration to a fresh Postgres (same script as the Vercel build)
+        run: npm run build -w @app/api && npm run db:migrate:ci -w @app/api
+        env:
+          MIGRATE_DATABASE_URL: ${{ env.PG_URL }}
+      - name: Integration tests against real Postgres
+        run: npm test
+        env:
+          TEST_DATABASE_URL: ${{ env.PG_URL }}
+
+  e2e:
+    name: E2E (Playwright, public pages)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      API_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      # Browser tests run only with a real Clerk development instance (repository secrets E2E_CLERK_*).
+      - run: npm run build -w @app/web
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY || 'pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk' }}
+          CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY || 'sk_test_ci' }}
+      - run: npm run test:e2e
+        env:
+          E2E_CLERK_PUBLISHABLE_KEY: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY }}
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY || 'pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk' }}
+          CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY || 'sk_test_ci' }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
+  migrate:
+    name: Migrate production database (manual fallback)
+    if: github.event_name == 'workflow_dispatch' && inputs.migrate && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @app/api
+      - name: Apply migrations (direct, unpooled URL)
+        run: npm run db:migrate:ci -w @app/api
+        env:
+          MIGRATE_DATABASE_URL: ${{ secrets.DATABASE_URL_UNPOOLED }}

@@ -1,0 +1,40 @@
+{
+  "name": "template-projeto",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev -w @app/api\" \"npm run dev -w @app/web\"",
+    "dev:api": "npm run dev -w @app/api",
+    "dev:web": "npm run dev -w @app/web",
+    "build": "npm run build -w @app/api && npm run build -w @app/web",
+    "typecheck": "npm run typecheck -w @app/api && npm run typecheck -w @app/web",
+    "db:generate": "npm run db:generate -w @app/api",
+    "db:migrate": "npm run db:migrate -w @app/api",
+    "db:studio": "npm run db:studio -w @app/api",
+    "test": "npm run test -w @app/api",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:e2e": "npm run test:e2e -w @app/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "concurrently": "^10.0.6",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "typescript-eslint": "^8.72.1"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
+  }
+}

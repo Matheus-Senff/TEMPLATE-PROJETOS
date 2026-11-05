@@ -1,0 +1,39 @@
+@layer theme, base, clerk, components, utilities;
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+}
+
+/* Motion: Reveal (components/motion/reveal.tsx). Content stays visible without JS. */
+.reveal[data-reveal="hidden"] {
+  opacity: 0;
+  transform: translateY(24px);
+}
+.reveal[data-reveal="visible"] {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+    transform 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms);
+}
+
+/* Respect the OS setting for every animation in the app. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal[data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+}

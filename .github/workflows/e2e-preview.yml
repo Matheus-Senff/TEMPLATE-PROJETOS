@@ -1,0 +1,64 @@
+name: E2E logado (preview)
+
+# Signed-in Playwright flows (apps/web/e2e/auth) against each successful Vercel preview of the WEB project:
+# real stack (preview API + Neon preview branch + Clerk development instance + R2 dev bucket).
+# Skips cleanly while the secrets below are not set. Secrets (repository): E2E_CLERK_PUBLISHABLE_KEY,
+# E2E_CLERK_SECRET_KEY (Clerk DEVELOPMENT instance) and, with Deployment Protection on,
+# VERCEL_AUTOMATION_BYPASS_SECRET (Vercel > Settings > Deployment Protection > Protection Bypass for Automation).
+# Repository variable VERCEL_WEB_PROJECT = name of the web project on Vercel (default: any name containing "web").
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-auth:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      startsWith(github.event.deployment_status.environment, 'Preview') &&
+      contains(github.event.deployment_status.environment, vars.VERCEL_WEB_PROJECT || 'web')
+    # Job-level and keyed by environment: deployment_status events of the API project (pending/success for the
+    # same commit) skip this job and must not cancel a running web E2E.
+    concurrency:
+      group: e2e-preview-${{ github.event.deployment.environment }}-${{ github.event.deployment.sha }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when the Clerk test secrets are missing
+        id: guard
+        env:
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "$E2E_CLERK_SECRET_KEY" ]; then
+            echo "E2E_CLERK_SECRET_KEY not set: skipping signed-in E2E."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.deployment.sha }}
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm ci
+      - if: steps.guard.outputs.skip != 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm run test:e2e -- --project=setup --project=desktop
+        env:
+          E2E_BASE_URL: ${{ github.event.deployment_status.environment_url || github.event.deployment_status.target_url }}
+          E2E_CLERK_PUBLISHABLE_KEY: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY }}
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-preview
+          path: apps/web/playwright-report
+          retention-days: 7

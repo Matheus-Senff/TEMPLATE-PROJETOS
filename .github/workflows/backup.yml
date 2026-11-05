@@ -1,0 +1,61 @@
+name: Backup do banco (Neon -> R2)
+
+# Daily pg_dump of the production database to a private R2 bucket (in addition to Neon's own point-in-time
+# restore, which is the first option for "undo the last hours"; see README > Backup e restauração).
+# Secrets (environment "production"):
+#   DATABASE_URL_UNPOOLED  direct (non-pooled) URL: pg_dump needs a session, PgBouncer's pooled URL is not enough
+#   R2_ACCOUNT_ID, R2_BACKUP_ACCESS_KEY_ID, R2_BACKUP_SECRET_ACCESS_KEY, R2_BACKUP_BUCKET
+# Retention: add a lifecycle rule on the bucket (e.g. delete after 30 days).
+# The dump is verified weekly by .github/workflows/restore-drill.yml. NEVER restore straight into production:
+# restore into a new Neon branch first (README).
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Skip when secrets are missing
+        id: guard
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          for v in DATABASE_URL_UNPOOLED R2_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_BACKUP_BUCKET; do
+            if [ -z "${!v}" ]; then echo "Secret for $v not set: skipping backup."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+      - name: Install PostgreSQL client 18
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-18
+      - name: Dump and upload
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          AWS_DEFAULT_REGION: auto
+          # aws-cli v2 >= 2.23 adds CRC checksums by default, which R2 rejects/mishandles on some operations.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          file="backup-$(date -u +%Y-%m-%dT%H-%M-%SZ).dump"
+          /usr/lib/postgresql/18/bin/pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL_UNPOOLED" -f "$file"
+          /usr/lib/postgresql/18/bin/pg_restore --list "$file" > /dev/null
+          aws s3 cp "$file" "s3://$R2_BACKUP_BUCKET/db/$file" --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
+          echo "Uploaded $file ($(du -h "$file" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"

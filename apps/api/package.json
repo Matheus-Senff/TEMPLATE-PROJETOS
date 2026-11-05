@@ -1,0 +1,63 @@
+{
+  "name": "@app/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "vercel-build": "npm run build && node dist/scripts/migrate.js",
+    "start": "node --env-file=.env dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:ci": "node dist/scripts/migrate.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
+    "@aws-sdk/s3-request-presigner": "^3.1161.0",
+    "@clerk/backend": "^3.26.5",
+    "@clerk/hono": "^0.1.96",
+    "@hono/node-server": "^2.1.6",
+    "@hono/zod-validator": "^0.9.1",
+    "@neondatabase/serverless": "^1.2.0",
+    "@sentry/hono": "^11.10.0",
+    "@upstash/qstash": "^2.12.1",
+    "@upstash/ratelimit": "^2.2.0",
+    "@upstash/redis": "^1.41.0",
+    "ably": "^2.30.0",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.16",
+    "posthog-node": "^5.61.2",
+    "resend": "^6.37.0",
+    "stripe": "^23.1.0",
+    "ws": "^8.22.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "drizzle-kit": "^0.31.11",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.0"
+  },
+  "exports": {
+    "./app": {
+      "types": "./src/app.ts"
+    },
+    "./schemas/*": {
+      "types": "./src/modules/*/*.schemas.ts",
+      "default": "./src/modules/*/*.schemas.ts"
+    }
+  }
+}

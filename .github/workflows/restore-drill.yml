@@ -1,0 +1,89 @@
+name: Teste de restauração do backup
+
+# Weekly drill: downloads the latest dump made by backup.yml, restores it into a throwaway Postgres
+# (service container, never production) and runs sanity checks: every table restored, row counts reported,
+# and every migration of the repository present in drizzle.__drizzle_migrations.
+# Same secrets as backup.yml (environment "production"), except the database URL (not needed here).
+
+on:
+  schedule:
+    - cron: "43 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    environment: production
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: restore
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RESTORE_URL: postgresql://postgres:postgres@localhost:5432/restore
+    steps:
+      - name: Skip when secrets are missing
+        id: guard
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+        run: |
+          for v in R2_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_BACKUP_BUCKET; do
+            if [ -z "${!v}" ]; then echo "Secret for $v not set: skipping drill."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install PostgreSQL client 18
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-18
+      - name: Download the latest dump
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          latest=$(aws s3 ls "s3://$R2_BACKUP_BUCKET/db/" --endpoint-url "$endpoint" | awk '{print $4}' | grep '\.dump$' | sort | tail -n 1)
+          if [ -z "$latest" ]; then echo "::error::No dump found in s3://$R2_BACKUP_BUCKET/db/"; exit 1; fi
+          aws s3 cp "s3://$R2_BACKUP_BUCKET/db/$latest" latest.dump --endpoint-url "$endpoint" --only-show-errors
+          echo "Dump: $latest ($(du -h latest.dump | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore into the throwaway Postgres
+        if: steps.guard.outputs.skip != 'true'
+        run: /usr/lib/postgresql/18/bin/pg_restore --no-owner --no-privileges --exit-on-error -d "$RESTORE_URL" latest.dump
+      - name: Sanity checks
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          psql=/usr/lib/postgresql/18/bin/psql
+          echo "| tabela | linhas |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for table in users files notifications audit_logs webhook_events billing_customers subscriptions; do
+            count=$($psql "$RESTORE_URL" -tAc "select count(*) from \"$table\"") || { echo "::error::table $table missing"; exit 1; }
+            echo "| $table | $count |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          expected=$(node -e "console.log(require('./apps/api/drizzle/meta/_journal.json').entries.length)")
+          applied=$($psql "$RESTORE_URL" -tAc "select count(*) from drizzle.__drizzle_migrations")
+          echo "Migrações: $applied aplicadas no backup, $expected no repositório" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$applied" -lt "$expected" ]; then
+            echo "::warning::backup is older than the latest migration ($applied < $expected)"
+          fi
+          orphans=$($psql "$RESTORE_URL" -tAc "select count(*) from files f left join users u on u.id = f.owner_id where u.id is null")
+          if [ "$orphans" != "0" ]; then echo "::error::$orphans files without owner"; exit 1; fi
+          echo "Restore drill OK" >> "$GITHUB_STEP_SUMMARY"
