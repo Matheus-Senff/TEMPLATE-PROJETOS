@@ -20,28 +20,28 @@
     "db:migrate:ci": "node dist/scripts/migrate.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1161.0",
-    "@aws-sdk/s3-request-presigner": "^3.1161.0",
-    "@clerk/backend": "^3.26.5",
-    "@clerk/hono": "^0.1.96",
-    "@hono/node-server": "^2.1.6",
+    "@aws-sdk/client-s3": "^3.1175.0",
+    "@aws-sdk/s3-request-presigner": "^3.1175.0",
+    "@clerk/backend": "^3.31.4",
+    "@clerk/hono": "^0.1.106",
+    "@hono/node-server": "^2.1.11",
     "@hono/zod-validator": "^0.9.1",
-    "@neondatabase/serverless": "^1.2.0",
-    "@sentry/hono": "^11.11.0",
-    "@upstash/qstash": "^2.12.1",
-    "@upstash/ratelimit": "^2.2.0",
+    "@neondatabase/serverless": "^1.2.1",
+    "@sentry/hono": "^11.17.0",
+    "@upstash/qstash": "^2.12.2",
+    "@upstash/ratelimit": "^2.2.1",
     "@upstash/redis": "^1.41.0",
     "ably": "^2.30.0",
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.16",
+    "hono": "^4.13.21",
     "posthog-node": "^5.61.2",
-    "resend": "^6.37.0",
-    "stripe": "^23.1.0",
-    "ws": "^8.22.1",
+    "resend": "^6.39.0",
+    "stripe": "^23.2.0",
+    "ws": "^8.23.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.15",
+    "@electric-sql/pglite": "^0.6.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.2",
@@ -49,7 +49,7 @@
     "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.0",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "exports": {
     "./app": {
